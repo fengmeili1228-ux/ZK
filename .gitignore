@@ -1,0 +1,39 @@
+# ==================== Python ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+*.log
+*.tmp
+
+# ==================== Secrets / Environment ====================
+# 永远不要把真实的 .env 提交到仓库！
+.env
+.env.local
+.env.*.local
+
+# ==================== IDE ====================
+.idea/
+.vscode/
+*.iml
+
+# ==================== Runtime Data & Outputs ====================
+# 临时文件、解析产物、向量文件、图片等
+knowledge/temp_data/
+knowledge/processor/import_processor/input_dir/
+knowledge/processor/import_processor/output_dir/
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.webp
+*.zip
+
+# 本地下载的模型
+models/
