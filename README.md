@@ -1,4 +1,4 @@
-# 掌柜智库 / 问器知识库后端（shopkeeper-brain）
+# RAG 智能知识库系统（shopkeeper-brain）
 
 基于 **FastAPI + LangGraph** 构建的本地知识库系统，支持文档导入、向量检索与问答生成。
 
