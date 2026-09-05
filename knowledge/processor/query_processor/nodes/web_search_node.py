@@ -13,6 +13,10 @@ class WebSearchNode(BaseNode):
     def process(self, state: QueryGraphState) -> QueryGraphState:
         #1. 参数校验
         rewritten_query, item_names = self._validate_state(state)
+        #1.1 如果处于宽范围检索兜底且配置要求跳过 Web 搜索，则直接返回空结果
+        if state.get("skip_web_search"):
+            self.logger.info("当前处于宽范围检索兜底模式且未启用 Web 回退，跳过 Web 搜索")
+            return {"web_search_docs": []}
         #2. 调用mcp工具进行网络检索（带兜底: MCP不可用时返回空结果,不影响主流程）
         try:
             execute_tool_result = asyncio.run(self.mcp_web_search(rewritten_query))
@@ -77,8 +81,8 @@ class WebSearchNode(BaseNode):
             self.logger.error(f"rewritten_query不能为空以及类型必须是str")
             raise StateFieldError(node_name=self.name, field_name="rewritten_query", expected_type=str)
 
-        if not item_names or not isinstance(item_names, list):
-            self.logger.error("item_names不能为空以及类型必须是list")
+        if not isinstance(item_names, list):
+            self.logger.error("item_names类型必须是list")
             raise StateFieldError(node_name=self.name, field_name="item_names", expected_type=list)
 
         return rewritten_query, item_names

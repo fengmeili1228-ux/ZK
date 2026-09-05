@@ -26,6 +26,7 @@ class RerankNode(BaseNode):
         #3. 动态截断,断崖检测
         reranked_docs = self._cliff_cutoff(sorted_doc_score,self.config.rerank_min_top_k,self.config.rerank_max_top_k,self.config.rerank_gap_abs)
 
+        self.logger.info(f"Rerank 后返回 {len(reranked_docs)} 个 chunk，首条 score: {reranked_docs[0].get('score') if reranked_docs else 'N/A'}")
         state["reranked_docs"] = reranked_docs
         return state
 

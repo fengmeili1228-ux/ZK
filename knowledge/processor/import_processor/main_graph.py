@@ -9,6 +9,7 @@ from langgraph.graph import StateGraph
 
 from knowledge.processor.import_processor.nodes.bge_embedding_chunks_node import BgeEmbeddingChunksNode
 from knowledge.processor.import_processor.nodes.document_split_node import DocumentSplitNode
+from knowledge.processor.import_processor.nodes.docx_to_md_node import DocxToMdNode
 from knowledge.processor.import_processor.nodes.entry_node import EntryNode
 from knowledge.processor.import_processor.nodes.item_name_recognition_node import ItemNameRecognitionNode
 from knowledge.processor.import_processor.nodes.md_image_node import MdImageNode
@@ -21,6 +22,9 @@ def import_router(state:ImportGraphState):
     if state.get('is_pdf_read_enabled'):
         # 是pdf文件
         return "pdf_router"
+    elif state.get('is_docx_read_enabled'):
+        # 是docx文件
+        return "docx_router"
     elif state.get('is_md_read_enabled'):
         # 是md文件
         return "md_router"
@@ -34,6 +38,7 @@ def import_graph():
     node_list = {
         "entry_node":EntryNode(),
         "pdf_to_md_node":PdfToMdNode(),
+        "docx_to_md_node":DocxToMdNode(),
         "md_image_node":MdImageNode(),
         "document_split_node":DocumentSplitNode(),
         "item_name_recognition_node":ItemNameRecognitionNode(),
@@ -61,10 +66,12 @@ def import_graph():
     work_flow.add_conditional_edges("entry_node",import_router,
                                     {
                                         "pdf_router":"pdf_to_md_node",
+                                        "docx_router":"docx_to_md_node",
                                         "md_router":"md_image_node"
                                     })
     #2.3.2 业务边
     work_flow.add_edge("pdf_to_md_node","md_image_node")
+    work_flow.add_edge("docx_to_md_node","md_image_node")
     work_flow.add_edge("md_image_node","document_split_node")
     work_flow.add_edge("document_split_node","item_name_recognition_node")
     work_flow.add_edge("item_name_recognition_node","bge_embedding_chunks_node")

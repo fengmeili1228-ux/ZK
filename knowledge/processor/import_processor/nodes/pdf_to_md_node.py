@@ -1,8 +1,10 @@
 import logging
 import shutil
 import time
+import uuid
 import zipfile
 from pathlib import Path
+from typing import List
 import requests
 from knowledge.processor.import_processor.base import BaseNode, T
 from knowledge.processor.import_processor.config import ImportConfig
@@ -17,13 +19,24 @@ class PdfToMdNode(BaseNode):
         self.log_step(step_name="Step1", message="上传PDF到MinerU并轮询解析结果")
         pdf_path = state.get("pdf_path")
         pdf_path_obj = Path(pdf_path)
-        zip_url = self._upload_pdf_and_query_result(self.config,pdf_path_obj)
-
-        #2. 下载ZIP并提取MD文件
-        self.log_step(step_name="Step2", message="下载Zip并解压")
         file_dir = state.get("file_dir")
         file_dir_obj = Path(file_dir)
-        md_path = self._extract_md(zip_url,file_dir_obj,pdf_path_obj)
+
+        # 判断 PDF 是否超过 MinerU 单批次页数限制，超限则自动拆分
+        max_pages = self.config.mineru_max_pages_per_batch
+        total_pages = self._count_pdf_pages(pdf_path_obj)
+        self.logger.info(f"PDF 总页数: {total_pages}, 单批次上限: {max_pages}")
+
+        if total_pages > 0 and total_pages <= max_pages:
+            # 未超限，按原有逻辑处理
+            zip_url = self._upload_pdf_and_query_result(self.config, pdf_path_obj)
+            md_path = self._extract_md(zip_url, file_dir_obj, pdf_path_obj)
+        else:
+            # 超限，拆分后分批处理，再合并 Markdown
+            if total_pages <= 0:
+                self.logger.warning("无法读取 PDF 页数，按未超限流程处理")
+            md_path = self._process_large_pdf(pdf_path_obj, file_dir_obj, max_pages)
+
         #3. 将md_path存入state中
         state['md_path'] = md_path
         return state
@@ -48,7 +61,7 @@ class PdfToMdNode(BaseNode):
         #2.3 构建请求体
         data = {
             "files": [
-                {"name": f"{pdf_path_obj.name}", "data_id": "abcd"}
+                {"name": f"{pdf_path_obj.name}", "data_id": str(uuid.uuid4())}
             ],
             "model_version": "vlm"
         }
@@ -96,10 +109,10 @@ class PdfToMdNode(BaseNode):
 
         #4. 轮询查询解析结果，直到成功、失败或超时
         #定义最大超时时间
-        max_time = 30
+        max_time = config.mineru_polling_timeout
 
         # 定义轮询的时间间隔
-        interval_time = 3
+        interval_time = config.mineru_polling_interval
 
         #定义开始时间
         start_time = time.time()
@@ -121,7 +134,10 @@ class PdfToMdNode(BaseNode):
             # 判断业务响应码
             pull_result = pull_res.json()
             if pull_result['code'] != 0:
-                self.logger.warning(f"【轮询解析结果】业务失败, 业务状态码为:{pull_result['code']}")
+                self.logger.warning(
+                    f"【轮询解析结果】业务失败, 业务状态码为:{pull_result['code']}, "
+                    f"响应内容:{pull_res.text}"
+                )
 
                 time.sleep(interval_time)
                 continue
@@ -137,8 +153,15 @@ class PdfToMdNode(BaseNode):
                 return full_zip_url
             elif extract_state == "failed":
                 # 表示MinerU转换Pdf成Md失败了
-                self.logger.error(f"【轮询解析结果】MinerU解析失败, batch_id:{batch_id}")
-                raise RuntimeError(f"【轮询解析结果】MinerU解析失败, batch_id:{batch_id}")
+                err_detail = extract_result[0] if extract_result else {}
+                self.logger.error(
+                    f"【轮询解析结果】MinerU解析失败, batch_id:{batch_id}, "
+                    f"state={extract_state}, detail={err_detail}"
+                )
+                raise RuntimeError(
+                    f"【轮询解析结果】MinerU解析失败, batch_id:{batch_id}, "
+                    f"detail={err_detail}"
+                )
             else:
                 # 表示其它状态，还没转换成功，需要继续轮询
                 time.sleep(interval_time)
@@ -200,6 +223,111 @@ class PdfToMdNode(BaseNode):
 
         #4 返回md文件的路径
         return str(new_md_file_path)
+
+    def _count_pdf_pages(self, pdf_path_obj: Path) -> int:
+        """统计 PDF 总页数，读取失败时返回 0。"""
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(str(pdf_path_obj))
+            return len(reader.pages)
+        except Exception as e:
+            self.logger.warning(f"统计 PDF 页数失败: {e}")
+            return 0
+
+    def _split_pdf(self, pdf_path_obj: Path, file_dir_obj: Path, max_pages: int) -> List[Path]:
+        """将大 PDF 按 max_pages 页拆分为多个小 PDF 文件。"""
+        from pypdf import PdfReader, PdfWriter
+        reader = PdfReader(str(pdf_path_obj))
+        total_pages = len(reader.pages)
+        chunk_files: List[Path] = []
+
+        for start in range(0, total_pages, max_pages):
+            end = min(start + max_pages, total_pages)
+            writer = PdfWriter()
+            for i in range(start, end):
+                writer.add_page(reader.pages[i])
+
+            chunk_index = start // max_pages + 1
+            chunk_name = f"{pdf_path_obj.stem}_part_{chunk_index}.pdf"
+            chunk_path = file_dir_obj / chunk_name
+            with open(chunk_path, "wb") as f:
+                writer.write(f)
+            chunk_files.append(chunk_path)
+            self.logger.info(f"PDF 拆分完成: {chunk_name}, 页码范围 {start + 1}-{end}")
+
+        return chunk_files
+
+    def _process_large_pdf(self, pdf_path_obj: Path, file_dir_obj: Path, max_pages: int) -> str:
+        """拆分大 PDF，逐片调用 MinerU，最后合并 Markdown 与图片。
+
+        最终产物结构与单个 PDF 一致：
+            file_dir/stem/stem.md
+            file_dir/stem/images/*.jpg
+        """
+        self.log_step(step_name="Step1.1", message="PDF 超过单批次页数限制，自动拆分处理")
+        chunk_files = self._split_pdf(pdf_path_obj, file_dir_obj, max_pages)
+
+        # 最终输出目录，结构与单个 PDF 处理结果保持一致
+        final_dir = file_dir_obj / pdf_path_obj.stem
+        final_images_dir = final_dir / "images"
+        try:
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+            final_images_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self.logger.warning(f"创建最终输出目录失败: {e}")
+
+        md_contents = []
+        for idx, chunk_file in enumerate(chunk_files, start=1):
+            self.logger.info(f"处理第 {idx}/{len(chunk_files)} 个 PDF 分片: {chunk_file.name}")
+            zip_url = self._upload_pdf_and_query_result(self.config, chunk_file)
+            chunk_md_path = self._extract_md(zip_url, file_dir_obj, chunk_file)
+
+            chunk_extract_dir = file_dir_obj / chunk_file.stem
+
+            # 收集该分片的 markdown 内容
+            try:
+                with open(chunk_md_path, "r", encoding="utf-8") as f:
+                    md_contents.append(f.read())
+            except Exception as e:
+                self.logger.error(f"读取分片 markdown 失败: {chunk_md_path}, 错误: {e}")
+                raise RuntimeError(f"读取分片 markdown 失败: {chunk_md_path}, 错误: {e}")
+
+            # 将该分片的图片合并到最终 images 目录（MinerU 用内容哈希命名，基本不会冲突）
+            chunk_images_dir = chunk_extract_dir / "images"
+            if chunk_images_dir.exists():
+                for img_file in chunk_images_dir.iterdir():
+                    if not img_file.is_file():
+                        continue
+                    target = final_images_dir / img_file.name
+                    if not target.exists():
+                        try:
+                            shutil.copy2(img_file, target)
+                        except Exception as e:
+                            self.logger.warning(f"复制图片失败: {img_file.name}, 错误: {e}")
+
+            # 清理分片产生的临时文件和目录
+            try:
+                chunk_file.unlink(missing_ok=True)
+                chunk_result_zip = file_dir_obj / f"{chunk_file.stem}_result.zip"
+                if chunk_result_zip.exists():
+                    chunk_result_zip.unlink()
+                if chunk_extract_dir.exists():
+                    shutil.rmtree(chunk_extract_dir)
+            except Exception as e:
+                self.logger.warning(f"清理分片临时文件失败: {e}")
+
+        # 合并所有分片的 markdown 内容，保存到与单个 PDF 相同的目录结构下
+        final_md_path = final_dir / f"{pdf_path_obj.stem}.md"
+        try:
+            with open(final_md_path, "w", encoding="utf-8") as f:
+                f.write("\n\n".join(md_contents))
+        except Exception as e:
+            self.logger.error(f"合并 markdown 文件失败: {e}")
+            raise RuntimeError(f"合并 markdown 文件失败: {e}")
+
+        self.logger.info(f"大 PDF 处理完成，合并后的 markdown 路径: {final_md_path}")
+        return str(final_md_path)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)

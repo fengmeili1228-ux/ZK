@@ -53,6 +53,18 @@ class ImportConfig:
         default_factory=lambda: os.getenv("MINERU_BASE_URL", "")
     )
 
+    mineru_max_pages_per_batch: int = field(
+        default_factory=lambda: int(os.getenv("MINERU_MAX_PAGES_PER_BATCH", "200"))
+    )
+
+    mineru_polling_timeout: int = field(
+        default_factory=lambda: int(os.getenv("MINERU_POLLING_TIMEOUT", "120"))
+    )
+
+    mineru_polling_interval: int = field(
+        default_factory=lambda: int(os.getenv("MINERU_POLLING_INTERVAL", "3"))
+    )
+
 
     # ==================== Milvus 配置 ====================
     milvus_url: str = field(

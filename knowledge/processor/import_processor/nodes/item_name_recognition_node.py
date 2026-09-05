@@ -26,13 +26,18 @@ class ItemNameRecognitionNode(BaseNode):
         #2.2 调用LLM识别商品名
         item_name = self._recognition_item_name(context,file_title)
 
-        #3. 将商品名进行向量化
-        hybrid_vectors = self._embedding_item_name(item_name)
+        #3. 提取章节标题，和文档级 item_name 一起组成可检索实体集合
+        section_titles = self._extract_section_titles(chunks, item_name, file_title)
+        all_item_names = [item_name] + section_titles
+        self.logger.info(f"文档级 item_name: {item_name}, 提取到 {len(section_titles)} 个章节标题")
 
-        #4. 存入向量数据库
-        self._insert_to_milvus(item_name,hybrid_vectors)
+        #4. 将所有可检索实体进行向量化
+        hybrid_vectors_list = self._embedding_item_names(all_item_names)
 
-        #5. 为了下游节点方便拿到商品名,我们可以将商品名回写到chunks里面
+        #5. 存入向量数据库
+        self._insert_to_milvus(all_item_names, hybrid_vectors_list)
+
+        #6. 为了下游节点方便拿到商品名,我们可以将商品名回写到chunks里面
         for chunk in chunks:
             if not isinstance(chunk,dict):
                 continue
@@ -41,7 +46,7 @@ class ItemNameRecognitionNode(BaseNode):
         state["item_name"] = item_name
         state["chunks"] = chunks
 
-        #6. 为了方便后续测试，再次备份chunks
+        #7. 为了方便后续测试，再次备份chunks
         self._backup_chunks(chunks,state)
 
         return state
@@ -138,18 +143,77 @@ class ItemNameRecognitionNode(BaseNode):
 
         return item_name
 
-    def _embedding_item_name(self, item_name:str) -> Dict[list,list]:
+    def _embedding_item_names(self, item_names: List[str]) -> List[Dict[str, Any]]:
+        """批量对一组商品名/标题进行向量化，返回与输入顺序对应的向量列表。"""
+        if not item_names:
+            return []
         #1. 创建embedding_client
         try:
             embedding_client = AIClients.get_bge_m3_client()
         except Exception as e:
             self.logger.warning(f"获取嵌入模型失败,{e}")
-            return None
+            return [None] * len(item_names)
         #2. 调用嵌入模型进行向量嵌入
-        hybrid_vectors = generate_bge_m3_hybrid_vectors(embedding_client,[item_name])
-        return hybrid_vectors
+        hybrid_vectors = generate_bge_m3_hybrid_vectors(embedding_client, item_names)
+        dense_list = hybrid_vectors.get("dense", [])
+        sparse_list = hybrid_vectors.get("sparse", [])
 
-    def _insert_to_milvus(self, item_name:str, hybrid_vectors:dict):
+        result = []
+        for i in range(len(item_names)):
+            result.append({
+                "dense": [dense_list[i]] if i < len(dense_list) else [None],
+                "sparse": [sparse_list[i]] if i < len(sparse_list) else [None]
+            })
+        return result
+
+    def _extract_section_titles(self, chunks: List[Dict[str, Any]], item_name: str, file_title: str) -> List[str]:
+        """从 chunks 的 title/parent_title 中提取可作为检索实体的章节标题。
+
+        规则：
+        - 去重；
+        - 去掉 markdown 标记 (#)；
+        - 长度在 4~80 个字符之间；
+        - 排除过于通用的词（如“概述”、“总结”）作为独立实体，保留有实质含义的标题。
+        """
+        import re
+        seen = set()
+        section_titles = []
+        generic_words = {"概述", "总结", "前言", "引言", "目录", "参考资料", "致谢"}
+
+        # 优先用文档级 item_name 作为前缀，便于后续区分同名章节
+        prefix = item_name if item_name and item_name != file_title else file_title
+
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            for key in ("title", "parent_title"):
+                raw = chunk.get(key)
+                if not raw or not isinstance(raw, str):
+                    continue
+                # 去除 markdown 标题标记和首尾空白
+                clean = re.sub(r"^\s*#+\s*", "", raw).strip()
+                if not clean:
+                    continue
+                # 长度过滤
+                if len(clean) < 4 or len(clean) > 80:
+                    continue
+                # 过滤纯通用词
+                if clean in generic_words:
+                    continue
+                # 去重
+                if clean in seen:
+                    continue
+                seen.add(clean)
+                # 格式：文档名 > 章节标题，增加可区分性
+                section_titles.append(f"{prefix} > {clean}")
+
+        return section_titles
+
+    def _insert_to_milvus(self, item_names: List[str], hybrid_vectors_list: List[Dict[str, Any]]):
+        """将一组商品名/标题及其向量批量插入 item_name_collection。"""
+        if not item_names or not hybrid_vectors_list:
+            return
+
         #1. 创建Milvus客户端
         try:
             milvus_client = StorageClients.get_milvus_client()
@@ -204,25 +268,27 @@ class ItemNameRecognitionNode(BaseNode):
                 index_params=index_params
             )
         #3. 插入数据
-        #3.1 构建要插入的数据行
-        # 获取稠密向量
-        dense_vector = hybrid_vectors.get("dense")[0]
-        # 获取稀疏向量
-        sparse_vector = hybrid_vectors.get("sparse")[0]
+        insert_data_list = []
+        for item_name, hybrid_vectors in zip(item_names, hybrid_vectors_list):
+            dense_vector = hybrid_vectors.get("dense")[0]
+            sparse_vector = hybrid_vectors.get("sparse")[0]
+            if not dense_vector or not sparse_vector:
+                self.logger.warning(f"稠密向量或者稀疏向量为空，跳过 item_name: {item_name}")
+                continue
+            insert_data_list.append({
+                "item_name": item_name,
+                "dense_vector": dense_vector,
+                "sparse_vector": sparse_vector
+            })
 
-        if not dense_vector or not sparse_vector:
-            self.logger.warning("稠密向量或者稀疏向量为空")
+        if not insert_data_list:
+            self.logger.warning("没有有效的 item_name 向量数据需要插入")
             return
 
-        insert_data = {
-            "item_name":item_name,
-            "dense_vector":dense_vector,
-            "sparse_vector":sparse_vector
-        }
-        #3.2 调用Milvus客户端的方法插入数据
+        #3.2 调用Milvus客户端的方法批量插入数据
         milvus_client.insert(
             collection_name=collection_name,
-            data=insert_data,
+            data=insert_data_list,
             timeout=30
         )
 

@@ -23,6 +23,7 @@ class RrfMergeNode(BaseNode):
 
         #5. 将融合后的结果存储到state中
         state['rrf_chunks'] = rrf_merged_result
+        self.logger.info(f"RRF 融合后返回 {len(rrf_merged_result)} 个 chunk")
         return state
 
     def _format_doc(self, chunks:List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -51,6 +52,10 @@ class RrfMergeNode(BaseNode):
             title = entity.get("title","")
             #2.2 获取content
             content = entity.get("content","")
+
+            if not content:
+                # 防御性处理：部分旧数据 content 为空，但 title 有值，使用 title 兜底
+                content = title
 
             if not content:
                 continue

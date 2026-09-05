@@ -53,8 +53,10 @@ class VectorSearchNode(BaseNode):
             limit=self.config.embedding_search_limit,
             output_fields=["item_name","title","content"]
         )
+        chunks = hybrid_search_results[0] if hybrid_search_results else []
+        self.logger.info(f"向量检索返回 {len(chunks)} 个 chunk，首条内容 preview: {chunks[0].get('entity', {}).get('content', '')[:60] if chunks else 'N/A'}")
         #7. 返回结果
-        return {"embedding_chunks":hybrid_search_results[0]}
+        return {"embedding_chunks": chunks}
 
     def _validate_state(self, state:QueryGraphState) -> Tuple[str, List[str]]:
         #1. 获取rewritten_query,item_names
@@ -65,8 +67,8 @@ class VectorSearchNode(BaseNode):
             self.logger.error(f"rewritten_query不能为空以及类型必须是str")
             raise StateFieldError(node_name=self.name,field_name="rewritten_query",expected_type=str)
 
-        if not item_names or not isinstance(item_names, list):
-            self.logger.error("item_names不能为空以及类型必须是list")
+        if not isinstance(item_names, list):
+            self.logger.error("item_names类型必须是list")
             raise StateFieldError(node_name=self.name,field_name="item_names",expected_type=list)
 
         return rewritten_query,item_names

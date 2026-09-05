@@ -76,11 +76,13 @@ class _ImageScanner:
     def scan_img_dir(self,image_dir_obj:Path,md_content:str) -> Tuple[List[ImageInfo],List[str]]:
 
         image_info_list = []
+        # 提前切分md内容,避免图片目录为空时md_lines未定义
+        md_lines = md_content.split("\n")
 
         # 0. 防御: 图片目录不存在时(如直接上传md文件,没有配套的images文件夹),直接返回空结果,避免iterdir()抛FileNotFoundError
         if not image_dir_obj.exists():
             self.logger.warning(f"图片目录不存在: {image_dir_obj}, 跳过图片扫描")
-            return image_info_list, md_content.split("\n")
+            return image_info_list, md_lines
 
         for image_file in image_dir_obj.iterdir():
             # 1 过滤子目录
@@ -90,8 +92,6 @@ class _ImageScanner:
             if image_file.suffix not in self.config.image_extensions:
                 continue
             # 3 在md_content中匹配到图片所在的行
-            # 3.1 将md_content按行进行切分
-            md_lines = md_content.split("\n")
             # 3.2 遍历出md的每一行
             # 声明匹配md中的图片的正则表达式
             pattern = re.compile(r"!\[.*?\]\(.*?" + re.escape(image_file.name) + r".*?\)")
@@ -372,7 +372,13 @@ class _ImageUploader:
                 # 需要替换
                 # 获取图片名
                 image_name = Path(match[2]).name
-                new_md_lines.append(f"![{image_summarizes[image_name]}]({remote_urls[image_name]})")
+                summarize = image_summarizes.get(image_name)
+                remote_url = remote_urls.get(image_name)
+                if summarize is None or remote_url is None:
+                    # 图片信息缺失（如图片目录不存在、图片未扫描到），保留原行，避免 KeyError
+                    new_md_lines.append(line)
+                    continue
+                new_md_lines.append(f"![{summarize}]({remote_url})")
             else:
                 # 不需要替换
                 new_md_lines.append(line)

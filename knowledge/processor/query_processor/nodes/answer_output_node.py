@@ -29,6 +29,19 @@ class AnswerOutputNode(BaseNode):
             self._push_exist_answer(answer,is_stream,task_id)
         else:
             #4.1 表示在答案输出节点执行之前，没有生成答案，那么就需要在答案输出节点中调用大模型来生成答案
+            #4.1.0 兜底：如果是宽范围检索模式且未检索到有效文档，返回友好提示
+            if state.get("is_broad_search"):
+                reranked_docs = state.get("reranked_docs") or []
+                # 过滤掉空内容或无效分数的文档
+                valid_docs = [d for d in reranked_docs if d.get("content")]
+                self.logger.info(f"宽范围检索模式，reranked_docs={len(reranked_docs)}, valid_docs={len(valid_docs)}")
+                if not valid_docs:
+                    not_found_answer = self._build_not_found_answer(state)
+                    state["answer"] = not_found_answer
+                    self._push_exist_answer(not_found_answer, is_stream, task_id)
+                    self._save_history(state)
+                    return state
+
             #4.1.1 组装提示词
             prompt = self._build_answer_prompt(state,self.config.max_context_chars)
             #4.1.2 调用大模型生成答案
@@ -53,6 +66,37 @@ class AnswerOutputNode(BaseNode):
             #1.2 非流式输出
             set_task_result(task_id=task_id,key="answer",value=answer)
 
+    #构建未找到资料时的友好提示
+    def _build_not_found_answer(self, state:QueryGraphState) -> str:
+        original_query = state.get("original_query", "")
+        item_names = state.get("item_names") or []
+        intent = state.get("intent", "")
+
+        # 明确超出知识库范围的问题（如天气、新闻、时间）
+        if intent == "unrelated_question":
+            return (
+                f"我主要负责知识库文档问答，暂时无法回答「{original_query}」这类超出知识库范围的问题。\n\n"
+                f"如果您有文档、产品、流程或资料相关的问题，请直接告诉我具体的关键词或主题。"
+            )
+
+        # 有明确实体名称（如产品型号、人名）但未检索到资料，使用针对性提示
+        if item_names:
+            return (
+                f"目前知识库中暂未找到与「{original_query}」相关的资料。\n\n"
+                f"建议您：\n"
+                f"1. 检查名称或型号是否准确；\n"
+                f"2. 尝试使用更完整的名称提问；\n"
+                f"3. 联系管理员补充相关文档。"
+            )
+
+        # 无明确实体名称的宽泛问题，使用通用提示
+        return (
+            f"目前知识库中暂未找到与「{original_query}」相关的内容。\n\n"
+            f"建议您：\n"
+            f"1. 提供更具体的关键词、名称或主题；\n"
+            f"2. 尝试换一种问法，例如询问文档中提到的具体人名、型号或术语；\n"
+            f"3. 联系管理员补充相关文档资料。"
+        )
 
     #构建答案生成的上下文prompt
     def _build_answer_prompt(self, state:QueryGraphState, max_context_chars:int) -> str:
@@ -73,7 +117,8 @@ class AnswerOutputNode(BaseNode):
             question = user_query,
             context = formatted_context,
             history = formatted_history,
-            item_names = ",".join(item_names)
+            item_names = ",".join(item_names),
+            max_answer_chars = self.config.max_answer_chars
         )
 
     #对历史对话的内容进行格式规整化

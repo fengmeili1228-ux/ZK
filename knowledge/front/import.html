@@ -385,8 +385,8 @@
 
     <div class="upload-area" id="dropZone" onclick="document.getElementById('fileInput').click()">
         <div class="upload-icon">☁️</div>
-        <div class="upload-text">点击或拖拽文件到此处 (PDF/MD)</div>
-        <input type="file" id="fileInput" class="file-input"  accept=".pdf,.md">
+        <div class="upload-text">点击或拖拽文件到此处 (PDF / MD / DOCX)</div>
+        <input type="file" id="fileInput" class="file-input"  accept=".pdf,.md,.docx">
     </div>
 
     <div id="fileList" class="file-list">
@@ -448,9 +448,12 @@
 
     async function uploadFile(file) {
         // === 核心逻辑优化：动态判断总节点数 ===
-        const isPDF = file.name.toLowerCase().endsWith('.pdf');
-        // PDF 需要 9 步（含上传），MD 跳过 pdf_to_md 需要 8 步
-        const totalNodes = isPDF ? 8 : 7;
+        const lowerName = file.name.toLowerCase();
+        const isPDF = lowerName.endsWith('.pdf');
+        const isDOCX = lowerName.endsWith('.docx');
+        // 入口(upload_file) + entry_node + 格式转换节点 + md_image_node + document_split_node
+        // + item_name_recognition_node + bge_embedding_chunks_node + milvus_import_node
+        const totalNodes = (isPDF || isDOCX) ? 8 : 7;
 
         const id = 'file-' + Math.random().toString(36).substr(2, 8);
         const html = `

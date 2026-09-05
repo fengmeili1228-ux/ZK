@@ -14,3 +14,6 @@ sentence-transformers
 pymongo
 mineru[all]
 openai-agents
+python-docx
+rapidfuzz
+pypdf

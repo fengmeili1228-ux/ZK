@@ -28,6 +28,9 @@ class QueryGraphState(TypedDict):
     rewritten_query: str  #重写答案
     history: list   # 历史对话
     is_stream: bool # 是否流式输出
+    is_broad_search: bool # 是否处于无商品名时的宽范围检索兜底模式
+    skip_web_search: bool # 宽范围检索模式下是否跳过 Web 搜索
+    intent: str # 用户意图（greeting/goodbye/chitchat/product_query/general_question）
 
 
 # ==================== 默认状态 ====================
@@ -48,6 +51,9 @@ DEFAULT_STATE: QueryGraphState = {
     "rewritten_query": "",          # 重写查询
     "history": [],                  # 历史对话
     "is_stream": False,             # 是否流式输出 (默认设为 False)
+    "is_broad_search": False,       # 是否处于宽范围检索兜底模式
+    "skip_web_search": False,       # 是否跳过 Web 搜索
+    "intent": "",                   # 用户意图
 }
 
 def create_default_state(**overrides) -> QueryGraphState:

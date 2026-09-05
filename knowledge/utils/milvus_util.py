@@ -130,7 +130,13 @@ def execute_hybrid_search_query(milvus_client: MilvusClient,
         raise RuntimeError(f"执行Milvus混合搜索失败 (collection={collection_name}): {e}") from e
 
 
-def _item_names_filter(item_names: List[str]) -> Tuple[str, Dict[str, Any]]:
+def _item_names_filter(item_names: List[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    根据商品名列表构建 Milvus 过滤表达式。
+    当 item_names 为空时返回 (None, None)，表示不做商品名过滤（宽范围检索）。
+    """
+    if not item_names:
+        return None, None
     expr = "item_name in {item_names}"
     expr_params = {"item_names": item_names}
     return expr, expr_params

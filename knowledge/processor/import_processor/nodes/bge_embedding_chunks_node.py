@@ -62,7 +62,10 @@ class BgeEmbeddingChunksNode(BaseNode):
             batch_chunks = chunks[i:i+embedding_batch_size]
             #2.4.2 对当前批次的chunk的内容进行向量化
             #2.4.2.1 将每一个chunk的item_name和content拼接成字符串
-            document_list = [f"{chunk.get('item_name')}\n{chunk.get('content')}" for chunk in batch_chunks]
+            document_list = [
+                f"{chunk.get('item_name')}\n{chunk.get('file_title')}\n{chunk.get('parent_title')}\n{chunk.get('title')}\n{chunk.get('content')}"
+                for chunk in batch_chunks
+            ]
             #2.2.4.2 对document_list进行向量化
             try:
                 embedding_result = generate_bge_m3_hybrid_vectors(embedding_client,document_list)

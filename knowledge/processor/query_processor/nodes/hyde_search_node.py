@@ -55,8 +55,10 @@ class HydeSearchNode(BaseNode):
             limit=self.config.hyde_search_limit,
             output_fields=["item_name","title","content"]
         )
+        chunks = hyde_search_result[0] if hyde_search_result else []
+        self.logger.info(f"HyDE 检索返回 {len(chunks)} 个 chunk，首条内容 preview: {chunks[0].get('entity', {}).get('content', '')[:60] if chunks else 'N/A'}")
         #9. 将hyde检索的结果存入state，并返回
-        return {"hyde_embedding_chunks":hyde_search_result[0]}
+        return {"hyde_embedding_chunks": chunks}
 
     def _validate_state(self, state:QueryGraphState):
         # 1. 获取rewritten_query,item_names
@@ -67,8 +69,8 @@ class HydeSearchNode(BaseNode):
             self.logger.error(f"rewritten_query不能为空以及类型必须是str")
             raise StateFieldError(node_name=self.name, field_name="rewritten_query", expected_type=str)
 
-        if not item_names or not isinstance(item_names, list):
-            self.logger.error("item_names不能为空以及类型必须是list")
+        if not isinstance(item_names, list):
+            self.logger.error("item_names类型必须是list")
             raise StateFieldError(node_name=self.name, field_name="item_names", expected_type=list)
 
         return rewritten_query, item_names
@@ -84,9 +86,10 @@ class HydeSearchNode(BaseNode):
             raise LLMError(node_name=self.name,message=f"创建大模型客户端失败,{e}")
 
         #2. 构建SystemMessage和HumanMessage
-        hyde_system_prompt = HYDE_SYSTEM_PROMPT_TEMPLATE.format(item_names=item_names)
+        item_names_text = "、".join(item_names) if item_names else "相关技术"
+        hyde_system_prompt = HYDE_SYSTEM_PROMPT_TEMPLATE.format(item_names=item_names_text)
         hyde_user_prompt = HYDE_USER_PROMPT_TEMPLATE.format(
-            item_names=item_names,
+            item_names=item_names_text,
             rewritten_query=rewritten_query
         )
 

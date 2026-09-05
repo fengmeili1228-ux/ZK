@@ -37,7 +37,7 @@ class EntryNode(BaseNode):
         #3. 判断文件类型
         #3.1 获取文件的后缀
         self.log_step(step_name="Step3", message="识别文件的后缀类型")
-        suffix = import_file_path_obj.suffix
+        suffix = import_file_path_obj.suffix.lower()
         #3.2 判断文件的后缀
         if suffix == ".pdf":
             #3.2.1 如果是pdf文件,则设置is_pdf_enable为True,设置pdf_path的值为import_file_path
@@ -47,10 +47,14 @@ class EntryNode(BaseNode):
             #3.2.2 如果是md文件,则设置is_md_enable为True, 设置md_path的值为import_file_path
             state['is_md_read_enabled'] = True
             state['md_path'] = import_file_path
+        elif suffix == ".docx":
+            #3.2.3 如果是docx文件,则设置is_docx_read_enabled为True, 设置docx_path的值为import_file_path
+            state['is_docx_read_enabled'] = True
+            state['docx_path'] = import_file_path
         else:
-            #3.2.3 抛异常
+            #3.2.4 抛异常
             self.logger.error(f"unsupported suffix {suffix}")
-            raise ValidationError(message="unsupported suffix",node_name=self.name)
+            raise ValidationError(message=f"unsupported suffix {suffix}",node_name=self.name)
 
         #4. 获取文件标题,并且将文件标题设置到state中
         self.log_step(step_name="Step4", message="获取文件的标题")
